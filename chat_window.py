@@ -5,11 +5,11 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QTextEdit, QScrollArea, QSizePolicy, QToolButton, QMenu,
     QApplication, QGraphicsOpacityEffect, QWidgetAction,
-    QGraphicsColorizeEffect, QFrame, QFileDialog, QMessageBox,
+    QGraphicsColorizeEffect, QFrame, QFileDialog, QMessageBox, QSizeGrip,
 )
 
 from i18n_manager import tr as _tr
-from qfluentwidgets import Action, BodyLabel, StrongBodyLabel, FluentIcon, RoundMenu, isDarkTheme
+from qfluentwidgets import Action, BodyLabel, StrongBodyLabel, FluentIcon, RoundMenu, LineEdit, MessageBoxBase, isDarkTheme
 from qfluentwidgets.components.widgets.menu import TextEditMenu
 from qfluentwidgets.common.config import qconfig
 from process_utils import app_base_dir
@@ -29,6 +29,7 @@ from app_theme import (
 import ctypes
 import os
 import shutil
+import sys
 from datetime import datetime
 import json
 import re
@@ -36,6 +37,11 @@ from pathlib import Path
 
 if os.name == "nt":
     import ctypes.wintypes
+
+if sys.platform == "darwin":
+    import macos_patch
+else:
+    macos_patch = None
 
 from llm_manager import (
     build_system_prompt, LLMStreamWorker, NonStreamWorker,
@@ -220,6 +226,30 @@ class FluentContextLabel(QLabel):
         menu.exec(event.globalPos(), ani=True)
 
 
+class GroupRenameDialog(MessageBoxBase):
+    def __init__(self, current_name: str, parent=None):
+        super().__init__(parent)
+        self.title_label = StrongBodyLabel(_tr("ChatWindow.rename_group_title"), self.widget)
+        self.desc_label = BodyLabel(_tr("ChatWindow.rename_group_label"), self.widget)
+        self.desc_label.setWordWrap(True)
+        self.name_edit = LineEdit(self.widget)
+        self.name_edit.setClearButtonEnabled(True)
+        self.name_edit.setText(current_name)
+        self.name_edit.selectAll()
+        self.name_edit.returnPressed.connect(self.yesButton.click)
+
+        self.yesButton.setText(_tr("ChatWindow.rename_group_save"))
+        self.cancelButton.setText(_tr("ChatWindow.rename_group_cancel"))
+        self.widget.setFixedWidth(380)
+        self.viewLayout.addWidget(self.title_label)
+        self.viewLayout.addWidget(self.desc_label)
+        self.viewLayout.addWidget(self.name_edit)
+        QTimer.singleShot(0, self.name_edit.setFocus)
+
+    def group_name(self) -> str:
+        return self.name_edit.text().strip()
+
+
 def _rounded_path(rect: QRectF, radii: tuple[float, float, float, float]) -> QPainterPath:
     tl, tr, br, bl = radii
     path = QPainterPath()
@@ -335,10 +365,10 @@ class IconButton(QToolButton):
 
 
 class ConversationHistoryRow(QWidget):
-    selected = Signal(int)
-    delete_requested = Signal(int)
+    selected = Signal(object)
+    delete_requested = Signal(object)
 
-    def __init__(self, conv_id: int, title: str, current: bool, parent=None):
+    def __init__(self, conv_id, title: str, current: bool, parent=None):
         super().__init__(parent)
         self._conv_id = conv_id
         self._current = current
@@ -441,6 +471,149 @@ class ConversationHistoryRow(QWidget):
         self.delete_requested.emit(self._conv_id)
 
 
+class GroupChatListRow(QWidget):
+    selected = Signal(object)
+    context_menu_requested = Signal(object, object)
+
+    def __init__(self, characters: list[str], title: str, preview: str, current: bool, parent=None):
+        super().__init__(parent)
+        self._characters = list(characters)
+        self._current = current
+        self._hovered = False
+        self._pressed = False
+        self._bg_color = QColor("transparent")
+        self._indicator_color = QColor("transparent")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedHeight(64)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(10)
+
+        avatar = QLabel(title[:1].upper(), self)
+        avatar.setObjectName("GroupListAvatar")
+        avatar.setFixedSize(34, 34)
+        avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        avatar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        layout.addWidget(avatar)
+
+        text_stack = QVBoxLayout()
+        text_stack.setContentsMargins(0, 0, 0, 0)
+        text_stack.setSpacing(2)
+        title_label = QLabel(title, self)
+        title_label.setObjectName("GroupListTitle")
+        title_label.setTextFormat(Qt.TextFormat.PlainText)
+        title_label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        title_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        preview_label = QLabel(preview, self)
+        preview_label.setObjectName("GroupListPreview")
+        preview_label.setTextFormat(Qt.TextFormat.PlainText)
+        preview_label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        preview_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        text_stack.addWidget(title_label)
+        text_stack.addWidget(preview_label)
+        layout.addLayout(text_stack, 1)
+
+        self._avatar = avatar
+        self._title_label = title_label
+        self._preview_label = preview_label
+        self.apply_theme()
+
+    def apply_theme(self):
+        dark = isDarkTheme()
+        if dark:
+            normal_bg = "transparent"
+            hover_bg = "#161c29"
+            pressed_bg = "#111724"
+            selected_bg = "#12192a"
+            selected_hover_bg = "#101626"
+            selected_pressed_bg = "#0c1220"
+        else:
+            normal_bg = "transparent"
+            hover_bg = "#f1f4fa"
+            pressed_bg = "#e7ecf5"
+            selected_bg = "#eaf0fb"
+            selected_hover_bg = "#e1e8f5"
+            selected_pressed_bg = "#d7e0ef"
+
+        if self._current:
+            bg = selected_pressed_bg if self._pressed else selected_hover_bg if self._hovered else selected_bg
+        else:
+            bg = pressed_bg if self._pressed else hover_bg if self._hovered else normal_bg
+
+        title = "#f8f8fb" if dark else "#1f2328"
+        preview = "#a9b0c3" if dark else "#657089"
+        avatar_bg = _TEAMS_ACCENT if self._current else ("#2a2f3b" if dark else "#e4eaf6")
+        avatar_fg = "#ffffff" if self._current else ("#dce4f7" if dark else "#44506a")
+        self._bg_color = QColor(bg)
+        self._indicator_color = QColor(accent_color(dark) if self._current else "transparent")
+        self.setStyleSheet(f"""
+            GroupChatListRow {{
+                background: transparent;
+            }}
+            QLabel#GroupListAvatar {{
+                background: {avatar_bg};
+                color: {avatar_fg};
+                border-radius: 17px;
+                font-weight: 700;
+            }}
+            QLabel#GroupListTitle {{
+                color: {title};
+                background: transparent;
+                font-weight: 600;
+            }}
+            QLabel#GroupListPreview {{
+                color: {preview};
+                background: transparent;
+                font-size: 11px;
+            }}
+        """)
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = QRectF(1, 1, self.width() - 2, self.height() - 2)
+        if self._bg_color.alpha() > 0:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(self._bg_color)
+            painter.drawRoundedRect(rect, 8, 8)
+        if self._current:
+            indicator = QRectF(1, 10, 3, self.height() - 20)
+            painter.setBrush(self._indicator_color)
+            painter.drawRoundedRect(indicator, 1.5, 1.5)
+        super().paintEvent(event)
+
+    def enterEvent(self, event):
+        self._hovered = True
+        self.apply_theme()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._hovered = False
+        self._pressed = False
+        self.apply_theme()
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._pressed = True
+            self.apply_theme()
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._pressed = False
+        self.apply_theme()
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.selected.emit(list(self._characters))
+        super().mouseReleaseEvent(event)
+
+    def contextMenuEvent(self, event):
+        self.context_menu_requested.emit(list(self._characters), event.globalPos())
+        event.accept()
+
+
 class PlanDivider(QWidget):
     def __init__(self, text: str, parent=None):
         super().__init__(parent)
@@ -538,6 +711,7 @@ class MessageBubble(QWidget):
         self._label.setWordWrap(True)
         self._label.setTextFormat(Qt.TextFormat.PlainText)
         self._label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         font = QFont()
         font.setPointSize(10)
         self._label.setFont(font)
@@ -588,8 +762,9 @@ class MessageBubble(QWidget):
         stack = QVBoxLayout()
         stack.setContentsMargins(0, 0, 0, 0)
         stack.setSpacing(2)
+        align = Qt.AlignmentFlag.AlignRight if self._role == "user" else Qt.AlignmentFlag.AlignLeft
         stack.addWidget(self._meta)
-        stack.addWidget(self._container)
+        stack.addWidget(self._container, 0, align)
 
         inner = QHBoxLayout()
         inner.setContentsMargins(0, 0, 0, 0)
@@ -610,8 +785,57 @@ class MessageBubble(QWidget):
 
     def _make_container(self, user: bool) -> QWidget:
         w = RoundedPanel()
-        w.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        w.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         return w
+
+    def _available_bubble_width(self, viewport_width: int = 0) -> int:
+        width = viewport_width or self.width()
+        if width <= 0 and self.parentWidget():
+            width = self.parentWidget().width()
+        if width <= 0:
+            width = 320
+        return max(80, width - 108)
+
+    @staticmethod
+    def _widest_plain_line(label: QLabel) -> int:
+        text = label.text().replace("\r\n", "\n").replace("\r", "\n")
+        lines = text.split("\n") if text else [""]
+        fm = label.fontMetrics()
+        return max(fm.horizontalAdvance(line) for line in lines)
+
+    @staticmethod
+    def _has_plain_newline(label: QLabel) -> bool:
+        return "\n" in label.text().replace("\r\n", "\n").replace("\r", "\n")
+
+    def _natural_bubble_width(self) -> int:
+        content_width = self._widest_plain_line(self._label)
+        if self._stream_label.isVisible() and self._stream_label.text():
+            content_width = max(content_width, self._widest_plain_line(self._stream_label))
+        if self._reasoning_panel.isVisible():
+            reasoning_width = max(
+                self._widest_plain_line(self._reasoning_title),
+                self._widest_plain_line(self._reasoning_label),
+            )
+            content_width = max(content_width, reasoning_width + 28)
+        return max(36, content_width + 24)
+
+    def update_bubble_width(self, viewport_width: int = 0):
+        available_width = self._available_bubble_width(viewport_width)
+        natural_width = self._natural_bubble_width()
+        target_width = min(natural_width, available_width)
+        should_wrap = natural_width > available_width or self._has_plain_newline(self._label)
+        self._label.setWordWrap(should_wrap)
+        self._reasoning_label.setWordWrap(True)
+        self._container.setFixedWidth(target_width)
+
+        text_width = max(1, target_width - 24)
+        self._label.setFixedWidth(text_width)
+        self._stream_label.setFixedWidth(text_width)
+        reasoning_text_width = max(1, target_width - 52)
+        self._reasoning_title.setFixedWidth(reasoning_text_width)
+        self._reasoning_label.setFixedWidth(reasoning_text_width)
+        self._container.updateGeometry()
+        self.updateGeometry()
 
     def _initials(self) -> str:
         text = self._author.strip()
@@ -638,6 +862,7 @@ class MessageBubble(QWidget):
     def _tick_typing(self):
         self._dot_step = (self._dot_step + 1) % 4
         self._stream_label.setText(_tr("ChatWindow.streaming") + "." * self._dot_step)
+        self.update_bubble_width()
 
     def apply_theme(self):
         dark = isDarkTheme()
@@ -691,6 +916,7 @@ class MessageBubble(QWidget):
         if self._streaming and old_height > 0:
             self.setMaximumHeight(old_height)
         self._label.setText(text)
+        self.update_bubble_width()
         if self._streaming:
             self._animate_stream_text()
             QTimer.singleShot(0, lambda h=old_height: self._animate_stream_height(h))
@@ -703,6 +929,7 @@ class MessageBubble(QWidget):
             self.setMaximumHeight(old_height)
         self._reasoning_label.setText(self._reasoning)
         self._reasoning_panel.setVisible(self._should_show_reasoning())
+        self.update_bubble_width()
         if self._streaming:
             if self._reasoning_panel.isVisible() and not was_visible:
                 self._animate_stream_text()
@@ -756,6 +983,7 @@ class MessageBubble(QWidget):
             self._typing_timer.stop()
             self._stream_label.hide()
             self.setMaximumHeight(16777215)
+            self.update_bubble_width()
 
 
 class ChatWindow(QWidget):
@@ -766,14 +994,16 @@ class ChatWindow(QWidget):
                  config_manager, parent_pet=None, group_characters=None):
         super().__init__()
         self._character = character
-        self._group_characters = group_characters or []
+        self._available_group_characters = self._normalize_group_characters(group_characters or [])
+        self._group_characters = list(self._available_group_characters)
         self._is_group_chat = len(self._group_characters) > 1
-        self._conversation_key = "__group__" if self._is_group_chat else character
+        self._conversation_key = self._conversation_key_for(self._group_characters if self._is_group_chat else [character])
         self._model_manager = model_manager
         self._live2d = live2d_module
         self._cfg = config_manager
         self._parent_pet = parent_pet
         self._conv_id: int | None = None
+        self._group_conv_id = ""
         self._worker = None
         self._current_bubble: MessageBubble | None = None
         self._pending_actions: list[str] = []
@@ -796,8 +1026,8 @@ class ChatWindow(QWidget):
         self._closing = False
         self._close_animating = False
         self._window_anim = None
+        self._pending_history_menu_action = None
 
-        self._display_name = _tr("ChatWindow.group_chat") if self._is_group_chat else model_manager.get_display_name(character)
         self._user_name = self._cfg.get("user_name", "").strip() if self._cfg else ""
         self._user_avatar_color = self._cfg.get("user_avatar_color", _TELEGRAM_ACCENT) if self._cfg else _TELEGRAM_ACCENT
         avatar_paths = self._cfg.get("chat_avatar_paths", {}) if self._cfg else {}
@@ -806,14 +1036,20 @@ class ChatWindow(QWidget):
 
         from database_manager import DatabaseManager
         self._db = DatabaseManager()
-        self._db.delete_empty_conversations(self._conversation_key)
+        if not self._is_group_chat:
+            self._db.delete_empty_conversations(self._conversation_key)
+        self._display_name = self._chat_display_name()
 
         icon_path = os.path.join(app_base_dir(), "logo.ico")
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
         self.setWindowTitle(_tr("ChatWindow.title", name=self._display_name))
-        self.setMinimumSize(360, 520)
-        self.resize(420, 620)
+        if self._is_group_chat:
+            self.setMinimumSize(720, 600)
+            self.resize(880, 680)
+        else:
+            self.setMinimumSize(360, 520)
+            self.resize(420, 620)
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -829,12 +1065,98 @@ class ChatWindow(QWidget):
 
         self._load_or_create_conversation()
 
+    def _normalize_group_characters(self, characters: list[str]) -> list[str]:
+        result = []
+        seen = set()
+        for character in characters:
+            if not character or character in seen:
+                continue
+            result.append(character)
+            seen.add(character)
+        return result
+
+    def _conversation_key_for(self, characters: list[str]) -> str:
+        normalized = self._normalize_group_characters(characters)
+        if len(normalized) <= 1:
+            return normalized[0] if normalized else self._character
+        return "__group__:" + "|".join(sorted(normalized, key=str.casefold))
+
+    def _characters_for_group_key(self, group_key: str) -> list[str]:
+        if not group_key.startswith("__group__:"):
+            return []
+        allowed = set(self._model_manager.characters)
+        return [character for character in group_key[len("__group__:"):].split("|") if character in allowed]
+
+    def _group_display_name(self, characters: list[str]) -> str:
+        group_key = self._conversation_key_for(characters)
+        if hasattr(self, "_db") and group_key.startswith("__group__:"):
+            custom_name = self._db.get_group_display_name(group_key).strip()
+            if custom_name:
+                return custom_name
+        return self._group_default_display_name(characters)
+
+    def _group_default_display_name(self, characters: list[str]) -> str:
+        names = [self._model_manager.get_display_name(character) for character in characters]
+        return "、".join(names)
+
+    def _chat_display_name(self) -> str:
+        if self._is_group_chat:
+            members = self._group_display_name(self._group_characters)
+            return _tr("ChatWindow.group_chat_named", members=members)
+        return self._model_manager.get_display_name(self._character)
+
+    def _group_chats(self) -> list[dict]:
+        result = []
+        seen = set()
+        for chat in self._db.get_group_chats():
+            characters = self._characters_for_group_key(chat.get("group_key", ""))
+            if len(characters) <= 1:
+                continue
+            group_key = self._conversation_key_for(characters)
+            if group_key in seen:
+                continue
+            seen.add(group_key)
+            entry = dict(chat)
+            entry["characters"] = characters
+            entry["group_key"] = group_key
+            result.append(entry)
+        live2d_characters = self._normalize_group_characters(self._available_group_characters)
+        live2d_key = self._conversation_key_for(live2d_characters)
+        if len(live2d_characters) > 1 and live2d_key not in seen:
+            result.insert(0, {
+                "group_key": live2d_key,
+                "conversation_id": "",
+                "content": "",
+                "created_at": "",
+                "characters": live2d_characters,
+            })
+        return result
+
+    def _new_group_conversation_id(self) -> str:
+        return "group-" + datetime.now().strftime("%Y%m%d%H%M%S%f")
+
+    def _ensure_group_conversation_id(self) -> str:
+        if not self._group_conv_id:
+            self._group_conv_id = self._new_group_conversation_id()
+        return self._group_conv_id
+
     def showEvent(self, event):
         super().showEvent(event)
         self._apply_windows_11_border_fix()
+        if macos_patch is not None:
+            QTimer.singleShot(0, self._apply_macos_window_polish)
         if not hasattr(self, '_entrance_done'):
             self._entrance_done = True
             QTimer.singleShot(0, self._play_entrance)
+
+    def _apply_macos_window_polish(self):
+        if macos_patch is None:
+            return
+        macos_patch.set_window_no_shadow(self)
+        macos_patch.set_window_level_floating(self)
+        # Tool window = NSPanel; default hidesOnDeactivate makes it disappear
+        # whenever the user clicks another app. Pin the chat visible.
+        macos_patch.set_hides_on_deactivate(self, False)
 
     def _apply_windows_11_border_fix(self):
         if os.name != "nt" or _dwm_set_window_attribute is None:
@@ -930,13 +1252,31 @@ class ChatWindow(QWidget):
 
         self._shell = RoundedPanel(self)
         self._shell.setObjectName("ChatShell")
-        shell_layout = QVBoxLayout(self._shell)
-        shell_layout.setContentsMargins(0, 0, 0, 0)
-        shell_layout.setSpacing(0)
         main_layout.addWidget(self._shell)
+        self._resize_grip = None
+
+        if self._is_group_chat:
+            shell_layout = QHBoxLayout(self._shell)
+            shell_layout.setContentsMargins(0, 0, 0, 0)
+            shell_layout.setSpacing(0)
+            self._group_sidebar = self._build_group_sidebar()
+            shell_layout.addWidget(self._group_sidebar, 1)
+
+            content = QWidget(self._shell)
+            content.setObjectName("ChatContent")
+            content_layout = QVBoxLayout(content)
+            content_layout.setContentsMargins(0, 0, 0, 0)
+            content_layout.setSpacing(0)
+            shell_layout.addWidget(content, 3)
+        else:
+            self._group_sidebar = None
+            shell_layout = QVBoxLayout(self._shell)
+            shell_layout.setContentsMargins(0, 0, 0, 0)
+            shell_layout.setSpacing(0)
+            content_layout = shell_layout
 
         self._titlebar = self._build_titlebar()
-        shell_layout.addWidget(self._titlebar)
+        content_layout.addWidget(self._titlebar)
 
         self._msg_area = QWidget()
         self._msg_area.setObjectName("MessageArea")
@@ -950,9 +1290,122 @@ class ChatWindow(QWidget):
         self._scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._scroll.setWidget(self._msg_area)
-        shell_layout.addWidget(self._scroll, 1)
+        content_layout.addWidget(self._scroll, 1)
 
-        shell_layout.addWidget(self._build_input_area())
+        content_layout.addWidget(self._build_input_area())
+
+        if self._is_group_chat:
+            self._resize_grip = QSizeGrip(self._shell)
+            self._resize_grip.setObjectName("GroupChatResizeGrip")
+            self._resize_grip.setFixedSize(18, 18)
+            self._resize_grip.raise_()
+            self._position_resize_grip()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._position_resize_grip()
+        self._relayout_message_bubbles()
+
+    def _position_resize_grip(self):
+        if not getattr(self, "_resize_grip", None):
+            return
+        margin = 6
+        self._resize_grip.move(
+            max(0, self._shell.width() - self._resize_grip.width() - margin),
+            max(0, self._shell.height() - self._resize_grip.height() - margin),
+        )
+
+    def _build_group_sidebar(self):
+        sidebar = RoundedPanel(self._shell)
+        sidebar.setObjectName("GroupSidebar")
+        sidebar.setFixedWidth(220)
+        layout = QVBoxLayout(sidebar)
+        layout.setContentsMargins(12, 12, 10, 12)
+        layout.setSpacing(10)
+
+        title = StrongBodyLabel(_tr("ChatWindow.group_list"), sidebar)
+        title.setObjectName("GroupSidebarTitle")
+        subtitle = BodyLabel(_tr("ChatWindow.group_list_hint"), sidebar)
+        subtitle.setObjectName("GroupSidebarSubtitle")
+        subtitle.setWordWrap(True)
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+
+        scroll = QScrollArea(sidebar)
+        scroll.setObjectName("GroupListScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        list_widget = QWidget(scroll)
+        list_widget.setObjectName("GroupList")
+        list_layout = QVBoxLayout(list_widget)
+        list_layout.setContentsMargins(0, 2, 4, 2)
+        list_layout.setSpacing(6)
+        scroll.setWidget(list_widget)
+        layout.addWidget(scroll, 1)
+
+        self._group_sidebar_title = title
+        self._group_sidebar_subtitle = subtitle
+        self._group_list_scroll = scroll
+        self._group_list_widget = list_widget
+        self._group_list_layout = list_layout
+        self._refresh_group_list()
+        return sidebar
+
+    def _group_preview(self, chat: dict) -> str:
+        preview = str(chat.get("content", "")).strip().replace("\n", " ")
+        if preview.startswith("【") and "】" in preview:
+            preview = preview[preview.index("】") + 1:].strip()
+        if not preview:
+            preview = _tr("ChatWindow.empty_conv")
+        if len(preview) > 28:
+            preview = preview[:28] + "..."
+        created_at = str(chat.get("created_at", ""))
+        time_text = created_at[5:16] if len(created_at) >= 16 else created_at
+        return f"{time_text}  {preview}".strip()
+
+    def _refresh_group_list(self):
+        if not hasattr(self, "_group_list_layout"):
+            return
+        while self._group_list_layout.count():
+            item = self._group_list_layout.takeAt(0)
+            widget = item.widget() if item else None
+            if widget:
+                widget.deleteLater()
+            if item:
+                del item
+
+        current_key = self._conversation_key_for(self._group_characters)
+        chats = self._group_chats()
+        if not chats:
+            empty = BodyLabel(_tr("ChatWindow.no_convs"), self._group_list_widget)
+            empty.setObjectName("GroupListEmpty")
+            empty.setWordWrap(True)
+            self._group_list_layout.addWidget(empty)
+            self._group_list_layout.addStretch()
+            return
+
+        for idx, chat in enumerate(chats):
+            combo = chat["characters"]
+            row = GroupChatListRow(
+                combo,
+                self._group_display_name(combo),
+                self._group_preview(chat),
+                self._conversation_key_for(combo) == current_key,
+                self._group_list_widget,
+            )
+            row.selected.connect(self._switch_group_chat)
+            row.context_menu_requested.connect(self._show_group_chat_context_menu)
+            self._group_list_layout.addWidget(row)
+            if idx < len(chats) - 1:
+                separator = QFrame(self._group_list_widget)
+                separator.setObjectName("GroupListSeparator")
+                separator.setFrameShape(QFrame.Shape.HLine)
+                separator.setFixedHeight(1)
+                self._group_list_layout.addWidget(separator)
+        self._group_list_layout.addStretch()
 
     def _build_titlebar(self):
         bar = RoundedPanel()
@@ -998,6 +1451,7 @@ class ChatWindow(QWidget):
         self._new_btn = new_btn
         self._close_btn = close_btn
         self._title_avatar = avatar
+        self._title_label = title
         self._update_title_avatar()
 
         self._drag_start = None
@@ -1117,7 +1571,7 @@ class ChatWindow(QWidget):
 
     def _refresh_avatar_views(self):
         self._update_title_avatar()
-        if self._conv_id is not None:
+        if self._is_group_chat or self._conv_id is not None:
             self._clear_message_widgets()
             self._load_messages()
 
@@ -1205,14 +1659,16 @@ class ChatWindow(QWidget):
             "focus_border": accent_color(dark),
         }
 
-        self.setStyleSheet(f"""
-            ChatWindow {{
+        self.setStyleSheet("""
+            ChatWindow {
                 background: transparent;
-            }}
+            }
         """)
 
         self._shell.set_panel_style(bg, border, 14, 1)
-        self._titlebar.set_panel_style(title_bg, title_border, (14, 14, 0, 0), 0)
+        title_radius = (0, 14, 0, 0) if self._is_group_chat else (14, 14, 0, 0)
+        input_radius = (0, 0, 14, 0) if self._is_group_chat else (0, 0, 14, 14)
+        self._titlebar.set_panel_style(title_bg, title_border, title_radius, 0)
         self._titlebar.setStyleSheet(f"""
             QLabel#TitleAvatar {{
                 background: {_TEAMS_ACCENT};
@@ -1225,6 +1681,61 @@ class ChatWindow(QWidget):
                 font-size: 11px;
             }}
         """)
+
+        if self._group_sidebar is not None:
+            sidebar_bg = "#151923" if dark else "#ffffff"
+            sidebar_border = "#242a37" if dark else "#e0e6f2"
+            self._group_sidebar.set_panel_style(sidebar_bg, sidebar_border, (14, 0, 0, 14), 0)
+            self._group_sidebar.setStyleSheet(f"""
+                QLabel#GroupSidebarTitle {{
+                    color: {text_color};
+                    background: transparent;
+                    font-size: 15px;
+                    font-weight: 700;
+                }}
+                QLabel#GroupSidebarSubtitle {{
+                    color: {muted};
+                    background: transparent;
+                    font-size: 11px;
+                }}
+                QLabel#GroupListEmpty {{
+                    color: {muted};
+                    background: transparent;
+                    padding: 10px;
+                }}
+                QFrame#GroupListSeparator {{
+                    background: {sidebar_border};
+                    border: none;
+                    margin-left: 46px;
+                    margin-right: 8px;
+                }}
+            """)
+            self._group_list_scroll.setStyleSheet(f"""
+                QScrollArea#GroupListScroll {{
+                    background: {sidebar_bg};
+                    border: none;
+                }}
+                QWidget#GroupList {{
+                    background: {sidebar_bg};
+                }}
+                QScrollBar:vertical {{
+                    background: {sidebar_bg};
+                    width: 6px;
+                }}
+                QScrollBar::handle:vertical {{
+                    background: {'#4c5569' if dark else '#c7d0e3'};
+                    border-radius: 3px;
+                    min-height: 30px;
+                }}
+                QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                    height: 0px;
+                }}
+            """)
+            for i in range(self._group_list_layout.count()):
+                item = self._group_list_layout.itemAt(i)
+                widget = item.widget() if item else None
+                if isinstance(widget, GroupChatListRow):
+                    widget.apply_theme()
 
         self._input.setStyleSheet(f"""
             QTextEdit {{
@@ -1240,7 +1751,7 @@ class ChatWindow(QWidget):
             }}
         """)
 
-        self._input_area.set_panel_style(composer_bg, title_border, (0, 0, 14, 14), 0)
+        self._input_area.set_panel_style(composer_bg, title_border, input_radius, 0)
         self._update_composer_focus_style()
 
         self._composer_hint.setStyleSheet(f"color: {muted}; background: transparent;")
@@ -1289,6 +1800,13 @@ class ChatWindow(QWidget):
                 bubbles.append(widget)
         return bubbles
 
+    def _relayout_message_bubbles(self):
+        if not hasattr(self, "_scroll"):
+            return
+        viewport_width = self._scroll.viewport().width()
+        for bubble in self._message_bubbles():
+            bubble.update_bubble_width(viewport_width)
+
     def _clear_message_widgets(self):
         if self._msg_layout.count() > 0:
             item = self._msg_layout.takeAt(self._msg_layout.count() - 1)
@@ -1325,7 +1843,7 @@ class ChatWindow(QWidget):
         self._show_conversation_history()
 
     def _show_conversation_history(self):
-        if self._worker and self._worker.isRunning():
+        if (self._worker and self._worker.isRunning()) or (self._group_plan_worker and self._group_plan_worker.isRunning()):
             return
         menu = QMenu(self)
         menu.setObjectName("ConversationHistoryMenu")
@@ -1362,6 +1880,27 @@ class ChatWindow(QWidget):
         """)
 
         if self._is_group_chat:
+            conversations = self._db.get_group_conversations(self._conversation_key)
+            title = menu.addAction(_tr("ChatWindow.history_title"))
+            title.setEnabled(False)
+            if conversations:
+                for conv in conversations:
+                    row = ConversationHistoryRow(
+                        conv["conversation_id"],
+                        self._group_preview(conv),
+                        conv["conversation_id"] == self._group_conv_id,
+                        menu,
+                    )
+                    row.selected.connect(lambda conv_id: self._select_group_history_row(menu, conv_id))
+                    row.delete_requested.connect(lambda conv_id: self._delete_group_history_row(menu, conv_id))
+                    action = QWidgetAction(menu)
+                    action.setDefaultWidget(row)
+                    menu.addAction(action)
+            else:
+                empty = menu.addAction(_tr("ChatWindow.no_convs"))
+                empty.setEnabled(False)
+            menu.addSeparator()
+
             change_menu = menu.addMenu(_tr("ChatWindow.avatar_change_menu"))
             reset_menu = menu.addMenu(_tr("ChatWindow.avatar_reset_menu"))
             for character in self._group_characters:
@@ -1371,6 +1910,11 @@ class ChatWindow(QWidget):
                 reset_action = reset_menu.addAction(display)
                 reset_action.setEnabled(bool(self._chat_avatar_paths.get(character)))
                 reset_action.triggered.connect(lambda _checked=False, c=character: self._reset_character_avatar(c))
+            pos = self._title_avatar.mapToGlobal(self._title_avatar.rect().bottomLeft())
+            self._pending_history_menu_action = None
+            menu.exec(pos)
+            self._run_pending_history_menu_action()
+            return
         else:
             change_action = menu.addAction(_tr("ChatWindow.avatar_change"))
             change_action.triggered.connect(lambda: self._set_character_avatar(self._character))
@@ -1468,15 +2012,117 @@ class ChatWindow(QWidget):
         new_action.triggered.connect(self._new_conversation)
 
         pos = self._title_avatar.mapToGlobal(self._title_avatar.rect().bottomLeft())
+        self._pending_history_menu_action = None
         menu.exec(pos)
+        self._run_pending_history_menu_action()
 
     def _select_history_row(self, menu: QMenu, conv_id: int):
-        menu.close()
-        self._switch_conversation(conv_id)
+        self._pending_history_menu_action = ("switch", conv_id)
+        QTimer.singleShot(0, menu.close)
+
+    def _select_group_history_row(self, menu: QMenu, conversation_id: str):
+        self._pending_history_menu_action = ("switch_group", conversation_id)
+        QTimer.singleShot(0, menu.close)
+
+    def _delete_group_history_row(self, menu: QMenu, conversation_id: str):
+        self._pending_history_menu_action = ("delete_group", conversation_id)
+        QTimer.singleShot(0, menu.close)
 
     def _delete_history_row(self, menu: QMenu, conv_id: int):
-        menu.close()
-        self._delete_conversation(conv_id)
+        self._pending_history_menu_action = ("delete", conv_id)
+        QTimer.singleShot(0, menu.close)
+
+    def _run_pending_history_menu_action(self):
+        action = self._pending_history_menu_action
+        self._pending_history_menu_action = None
+        if not action:
+            return
+        name, value = action
+        if name == "switch":
+            QTimer.singleShot(0, lambda value=value: self._switch_conversation(value))
+        elif name == "delete":
+            QTimer.singleShot(0, lambda value=value: self._delete_conversation(value))
+        elif name == "switch_group":
+            QTimer.singleShot(0, lambda value=value: self._switch_group_conversation(value))
+        elif name == "delete_group":
+            QTimer.singleShot(0, lambda value=value: self._delete_group_conversation(value))
+
+    def _switch_group_chat(self, characters: list[str]):
+        if (self._worker and self._worker.isRunning()) or (self._group_plan_worker and self._group_plan_worker.isRunning()):
+            return
+        normalized = self._normalize_group_characters(characters)
+        if len(normalized) <= 1:
+            return
+        next_key = self._conversation_key_for(normalized)
+        if next_key == self._conversation_key:
+            return
+
+        self._stream_flush_timer.stop()
+        self._stream_buffer = ""
+        self._visible_stream_text = ""
+        self._reasoning_stream_text = ""
+        self._current_bubble = None
+        self._group_queue = []
+        self._group_spoken = []
+        self._group_characters = normalized
+        self._is_group_chat = True
+        self._conversation_key = next_key
+        self._display_name = self._chat_display_name()
+        self.setWindowTitle(_tr("ChatWindow.title", name=self._display_name))
+        if hasattr(self, "_title_label"):
+            self._title_label.setText(self._display_name)
+        self._update_title_avatar()
+        self._clear_message_widgets()
+        self._conv_id = None
+        self._load_or_create_conversation()
+        self._refresh_group_list()
+        self._input.setFocus()
+
+    def _switch_group_conversation(self, conversation_id: str):
+        if conversation_id == self._group_conv_id:
+            return
+        if (self._worker and self._worker.isRunning()) or (self._group_plan_worker and self._group_plan_worker.isRunning()):
+            return
+        self._stream_flush_timer.stop()
+        self._stream_buffer = ""
+        self._visible_stream_text = ""
+        self._reasoning_stream_text = ""
+        self._current_bubble = None
+        self._group_queue = []
+        self._group_spoken = []
+        self._group_conv_id = conversation_id
+        self._clear_message_widgets()
+        self._load_messages()
+        self._input.setFocus()
+
+    def _show_group_chat_context_menu(self, characters: list[str], global_pos):
+        if (self._worker and self._worker.isRunning()) or (self._group_plan_worker and self._group_plan_worker.isRunning()):
+            return
+        group_key = self._conversation_key_for(characters)
+        if not group_key.startswith("__group__:"):
+            return
+        menu = RoundMenu(parent=self)
+        rename_action = Action(FluentIcon.EDIT, _tr("ChatWindow.rename_group"), self)
+        rename_action.triggered.connect(lambda: self._rename_group_chat(characters))
+        menu.addAction(rename_action)
+        menu.exec(global_pos, ani=True)
+
+    def _rename_group_chat(self, characters: list[str]):
+        group_key = self._conversation_key_for(characters)
+        default_name = self._group_default_display_name(characters)
+        current_name = self._db.get_group_display_name(group_key).strip() or default_name
+        dialog = GroupRenameDialog(current_name, self)
+        if not dialog.exec():
+            return
+        new_name = dialog.group_name()
+        self._db.set_group_display_name(group_key, new_name if new_name != default_name else "")
+        if group_key == self._conversation_key:
+            self._display_name = self._chat_display_name()
+            self.setWindowTitle(_tr("ChatWindow.title", name=self._display_name))
+            if hasattr(self, "_title_label"):
+                self._title_label.setText(self._display_name)
+            self._update_title_avatar()
+        self._refresh_group_list()
 
     def _switch_conversation(self, conv_id: int):
         if conv_id == self._conv_id:
@@ -1498,6 +2144,7 @@ class ChatWindow(QWidget):
             return
         was_current = conv_id == self._conv_id
         self._db.delete_conversation(conv_id)
+        self._refresh_group_list()
 
         if not was_current:
             return
@@ -1514,6 +2161,30 @@ class ChatWindow(QWidget):
             self._load_messages()
         else:
             self._conv_id = None
+        self._input.setFocus()
+
+    def _delete_group_conversation(self, conversation_id: str):
+        if (self._worker and self._worker.isRunning()) or (self._group_plan_worker and self._group_plan_worker.isRunning()):
+            return
+        was_current = conversation_id == self._group_conv_id
+        self._db.delete_group_conversation(self._conversation_key, conversation_id)
+        self._refresh_group_list()
+
+        if not was_current:
+            return
+
+        conversations = self._db.get_group_conversations(self._conversation_key)
+        self._stream_flush_timer.stop()
+        self._stream_buffer = ""
+        self._visible_stream_text = ""
+        self._reasoning_stream_text = ""
+        self._current_bubble = None
+        self._group_queue = []
+        self._group_spoken = []
+        self._clear_message_widgets()
+        self._group_conv_id = conversations[0]["conversation_id"] if conversations else ""
+        if self._group_conv_id:
+            self._load_messages()
         self._input.setFocus()
 
     def _has_llm_config(self) -> bool:
@@ -1582,6 +2253,11 @@ class ChatWindow(QWidget):
         self._input.setVerticalScrollBarPolicy(scrollbar_policy)
 
     def _load_or_create_conversation(self):
+        if self._is_group_chat:
+            conversations = self._db.get_group_conversations(self._conversation_key)
+            self._group_conv_id = conversations[0]["conversation_id"] if conversations else ""
+            self._load_messages()
+            return
         last = self._db.get_last_conversation(self._conversation_key)
         if last:
             self._conv_id = last["id"]
@@ -1589,6 +2265,17 @@ class ChatWindow(QWidget):
 
     def _new_conversation(self):
         if self._worker and self._worker.isRunning():
+            return
+        if self._is_group_chat:
+            self._stream_flush_timer.stop()
+            self._stream_buffer = ""
+            self._visible_stream_text = ""
+            self._reasoning_stream_text = ""
+            self._current_bubble = None
+            self._clear_message_widgets()
+            self._group_conv_id = self._new_group_conversation_id()
+            self._refresh_group_list()
+            self._input.setFocus()
             return
         self._stream_flush_timer.stop()
         self._stream_buffer = ""
@@ -1599,9 +2286,14 @@ class ChatWindow(QWidget):
         self._conv_id = None
 
     def _load_messages(self):
-        if self._conv_id is None:
+        if self._is_group_chat:
+            if not self._group_conv_id:
+                return
+            messages = self._db.get_group_messages(self._conversation_key, self._group_conv_id)
+        elif self._conv_id is None:
             return
-        messages = self._db.get_messages(self._conv_id)
+        else:
+            messages = self._db.get_messages(self._conv_id)
         stretch = self._msg_layout.takeAt(self._msg_layout.count() - 1)
         if stretch:
             del stretch
@@ -1629,6 +2321,7 @@ class ChatWindow(QWidget):
             )
             self._msg_layout.addWidget(bubble)
         self._msg_layout.addStretch()
+        self._relayout_message_bubbles()
         QTimer.singleShot(50, self._scroll_to_bottom)
 
     def _message_author(self, content: str) -> str:
@@ -1672,7 +2365,12 @@ class ChatWindow(QWidget):
     def _build_messages_for_character(self, character: str, spoken_names: list[str]) -> list[dict]:
         system_prompt = self._group_system_prompt(character, spoken_names) if self._is_group_chat else build_system_prompt(character, self._cfg)
         messages = [{"role": "system", "content": system_prompt}]
-        if self._conv_id:
+        if self._is_group_chat:
+            history = self._db.get_group_messages(self._conversation_key, self._group_conv_id) if self._group_conv_id else []
+            max_history = 20
+            for m in history[-(max_history * 2):]:
+                messages.append({"role": m["role"], "content": m["content"]})
+        elif self._conv_id:
             history = self._db.get_messages(self._conv_id)
             max_history = 20
             for m in history[-(max_history * 2):]:
@@ -1707,6 +2405,7 @@ class ChatWindow(QWidget):
                 avatar_focus=avatar_focus,
             )
             self._msg_layout.insertWidget(self._msg_layout.count() - 1, bubble)
+            self._relayout_message_bubbles()
             self._scroll_to_bottom()
             return
 
@@ -1724,10 +2423,15 @@ class ChatWindow(QWidget):
             show_reasoning=self._show_reasoning,
         )
         self._msg_layout.insertWidget(self._msg_layout.count() - 1, user_bubble)
+        self._relayout_message_bubbles()
 
-        if self._conv_id is None:
-            self._conv_id = self._db.create_conversation(self._conversation_key)
-        self._db.add_message(self._conv_id, "user", text)
+        if self._is_group_chat:
+            self._db.add_group_message(self._conversation_key, self._ensure_group_conversation_id(), "user", text)
+        else:
+            if self._conv_id is None:
+                self._conv_id = self._db.create_conversation(self._conversation_key)
+            self._db.add_message(self._conv_id, "user", text)
+        self._refresh_group_list()
         if self._is_group_chat:
             self._group_spoken = []
             self._start_group_plan(text)
@@ -1748,9 +2452,9 @@ class ChatWindow(QWidget):
             for character in self._group_characters
         ]
         recent = []
-        if self._conv_id:
-            for m in self._db.get_messages(self._conv_id)[-12:]:
-                recent.append({"role": m["role"], "content": m["content"]})
+        history = self._db.get_group_messages(self._conversation_key, self._group_conv_id) if self._group_conv_id else []
+        for m in history[-12:]:
+            recent.append({"role": m["role"], "content": m["content"]})
         planner_prompt = (
             "你是群聊发言调度器。根据用户最新发言、成员关系和最近上下文，决定接下来哪些角色发言以及发言条数。"
             "输出必须是严格 JSON，格式：{\"speakers\":[\"角色key\",...]}。"
@@ -1843,6 +2547,7 @@ class ChatWindow(QWidget):
         )
         self._current_bubble.set_streaming(True)
         self._msg_layout.insertWidget(self._msg_layout.count() - 1, self._current_bubble)
+        self._relayout_message_bubbles()
         self._scroll_to_bottom()
 
         messages = self._build_messages_for_character(character, spoken_names)
@@ -1915,9 +2620,13 @@ class ChatWindow(QWidget):
             self._current_bubble.set_reasoning(reasoning_clean)
             self._current_bubble.set_text(clean)
 
-        if self._conv_id:
-            stored = self._assistant_content(self._active_response_character, clean)
+        stored = self._assistant_content(self._active_response_character, clean)
+        if self._is_group_chat:
+            self._db.add_group_message(self._conversation_key, self._ensure_group_conversation_id(), "assistant", stored, reasoning_clean)
+            self._refresh_group_list()
+        elif self._conv_id:
             self._db.add_message(self._conv_id, "assistant", stored, reasoning_clean)
+            self._refresh_group_list()
 
         if self._is_group_chat:
             self._group_spoken.append(self._model_manager.get_display_name(self._active_response_character))
@@ -1949,9 +2658,13 @@ class ChatWindow(QWidget):
             self._current_bubble.set_reasoning(reasoning_clean)
             self._current_bubble.set_text(clean)
 
-        if self._conv_id:
-            stored = self._assistant_content(self._active_response_character, clean)
+        stored = self._assistant_content(self._active_response_character, clean)
+        if self._is_group_chat:
+            self._db.add_group_message(self._conversation_key, self._ensure_group_conversation_id(), "assistant", stored, reasoning_clean)
+            self._refresh_group_list()
+        elif self._conv_id:
             self._db.add_message(self._conv_id, "assistant", stored, reasoning_clean)
+            self._refresh_group_list()
 
         if self._is_group_chat:
             self._group_spoken.append(self._model_manager.get_display_name(self._active_response_character))

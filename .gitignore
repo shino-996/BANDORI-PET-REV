@@ -3,11 +3,13 @@ __pycache__/
 .runtime/
 models/
 pixels/
+BUILD/
 build/
 BandoriPet.egg-info/
 third_party/
 venv/
 config.json
+config.json.*.tmp
 .runtime/
 data.*
 *.zip

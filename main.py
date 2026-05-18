@@ -14,7 +14,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from live2d_lua_adapter import live2d
 from live2d_widget import Live2DWidget
-from model_manager import ModelManager
+from model_manager import ModelManager, models_dir_exists, prompt_download_model_resources
 from config_manager import ConfigManager
 from i18n_manager import set_language, detect_system_language, tr as _tr
 from app_theme import apply_app_theme
@@ -58,6 +58,10 @@ def main():
     app.setQuitOnLastWindowClosed(False)
 
     apply_app_theme(cfg.get("dark_theme", False))
+
+    if not models_dir_exists():
+        prompt_download_model_resources()
+        return 0
 
     mgr = ModelManager()
     pet_window_ref = {"processes": []}
@@ -233,12 +237,15 @@ def main():
                 pass
             if process.state() != QProcess.ProcessState.NotRunning:
                 if force:
-                    process.kill()
-                    process.waitForFinished(0)
+                    if not process.waitForFinished(1000):
+                        process.kill()
+                        process.waitForFinished(1000)
                 else:
                     process.terminate()
                     if not process.waitForFinished(100):
                         process.kill()
+                        process.waitForFinished(1000)
+            process.deleteLater()
         pet_window_ref["processes"] = []
 
     def close_settings_process(force=False):
@@ -254,11 +261,13 @@ def main():
         if process.state() != QProcess.ProcessState.NotRunning:
             if force:
                 process.kill()
-                process.waitForFinished(0)
+                process.waitForFinished(1000)
             else:
                 process.terminate()
                 if not process.waitForFinished(1000):
                     process.kill()
+                    process.waitForFinished(1000)
+        process.deleteLater()
         settings_process_ref.pop("process", None)
         settings_process_ref.pop("show_launch", None)
 
@@ -506,6 +515,7 @@ def main():
 
     app.aboutToQuit.connect(save_config)
     app.aboutToQuit.connect(stop_ai_status_server)
+    app.aboutToQuit.connect(close_settings_process)
     app.aboutToQuit.connect(close_pet_processes)
 
     if has_configured_models or model_valid:
