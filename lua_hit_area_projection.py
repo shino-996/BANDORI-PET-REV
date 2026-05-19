@@ -14,11 +14,19 @@ _LUA_BASENAME = "custom_hit_area_state"
 
 def _lua_source_path() -> Path:
     if getattr(sys, "frozen", False):
-        frozen_dir = Path(sys.executable).resolve().parent
-        bytecode_path = frozen_dir / f"{_LUA_BASENAME}.ljbc"
-        if bytecode_path.exists():
-            return bytecode_path
-        return frozen_dir / f"{_LUA_BASENAME}.lua"
+        candidates = [
+            Path(sys.executable).resolve().parent,
+            Path(sys.executable).resolve().parent.parent / "Resources",
+        ]
+        for base in candidates:
+            p = base / f"{_LUA_BASENAME}.ljbc"
+            if p.exists():
+                return p
+        for base in candidates:
+            p = base / f"{_LUA_BASENAME}.lua"
+            if p.exists():
+                return p
+        return candidates[0] / f"{_LUA_BASENAME}.ljbc"
     return Path(__file__).resolve().with_name(f"{_LUA_BASENAME}.lua")
 
 

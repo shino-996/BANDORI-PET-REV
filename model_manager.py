@@ -18,10 +18,22 @@ from zst_model_archive import (
 )
 
 BASE_DIR = app_base_dir()
-MODELS_DIR = BASE_DIR / "models"
-OUTFIT_JSON = BASE_DIR / "outfit.json"
-BAND_JSON = BASE_DIR / "band.json"
-CHARACTERS_DIR = BASE_DIR / "characters"
+
+def _bundle_resource(name: str) -> Path:
+    """Return path to a resource, falling back to Contents/Resources in a macOS bundle."""
+    import sys
+    p = BASE_DIR / name
+    if not p.exists() and getattr(sys, "frozen", False):
+        resources = BASE_DIR.parent / "Resources"
+        fallback = resources / name
+        if fallback.exists():
+            return fallback
+    return p
+
+MODELS_DIR = _bundle_resource("models")
+OUTFIT_JSON = _bundle_resource("outfit.json")
+BAND_JSON = _bundle_resource("band.json")
+CHARACTERS_DIR = _bundle_resource("characters")
 MODELS_DOWNLOAD_URL = "https://modelscope.cn/datasets/HELPMEEADICE/BanG-Dream-Live2D/resolve/master/models.zip"
 
 
