@@ -174,6 +174,7 @@ def hide_dock_icon():
         return
     try:
         from AppKit import NSApp, NSApplicationActivationPolicyAccessory
+        NSApp.activateIgnoringOtherApps_(True)
         NSApp.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
         return
     except Exception:
@@ -192,6 +193,90 @@ def hide_dock_icon():
         sender(app, _sel("setActivationPolicy:"), 1)
     except Exception:
         pass
+
+
+def install_ns_status_item(icon_path: str, on_settings: callable, on_quit: callable) -> object:
+    """Create a native NSStatusItem with a simple Settings / Quit menu.
+
+    Returns the NSStatusItem (caller must keep a strong reference).
+    """
+    try:
+        from AppKit import (
+            NSApp,
+            NSStatusBar,
+            NSImage,
+            NSMenu,
+            NSMenuItem,
+            NSVariableStatusItemLength,
+        )
+        import objc
+
+        NSApp.activateIgnoringOtherApps_(True)
+
+        class _MenuDelegate(objc.lookUpClass("NSObject")):
+            @objc.python_method
+            def setup(self, settings_cb, quit_cb):
+                self._settings_cb = settings_cb
+                self._quit_cb = quit_cb
+
+            def openSettings_(self, sender):
+                self._settings_cb()
+
+            def quitApp_(self, sender):
+                self._quit_cb()
+
+        status_bar = NSStatusBar.systemStatusBar()
+        item = status_bar.statusItemWithLength_(NSVariableStatusItemLength)
+        button = item.button()
+
+        if icon_path:
+            img = NSImage.alloc().initWithContentsOfFile_(icon_path)
+            if img is not None:
+                img.setSize_((18, 18))
+                button.setImage_(img)
+
+        delegate = _MenuDelegate.alloc().init()
+        delegate.setup(on_settings, on_quit)
+
+        ns_menu = NSMenu.alloc().init()
+
+        settings_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Settings", objc.selector(delegate.openSettings_, selector=b"openSettings:"), ""
+        )
+        settings_item.setTarget_(delegate)
+        ns_menu.addItem_(settings_item)
+
+        ns_menu.addItem_(NSMenuItem.separatorItem())
+
+        quit_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Quit", objc.selector(delegate.quitApp_, selector=b"quitApp:"), ""
+        )
+        quit_item.setTarget_(delegate)
+        ns_menu.addItem_(quit_item)
+
+        item.setMenu_(ns_menu)
+        # Return a tuple so the caller holds strong refs to both objects.
+        return (item, delegate)
+    except Exception:
+        return None
+
+
+def set_becomes_key_only_if_needed(widget) -> bool:
+    if not _init_objc() or widget is None:
+        return False
+    try:
+        win_id = int(widget.winId())
+    except (TypeError, ValueError):
+        return False
+    if not win_id:
+        return False
+    window = _get_ns_window(win_id)
+    if not window:
+        return False
+    f = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_bool)
+    sender = ctypes.cast(_OBJC.objc_msgSend, f)
+    sender(window, _sel("setBecomesKeyOnlyIfNeeded:"), ctypes.c_bool(True))
+    return True
 
 
 def is_available() -> bool:

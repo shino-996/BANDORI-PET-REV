@@ -75,16 +75,44 @@ def main():
     from i18n_manager import current_language
 
     tray_icon = None
+    _ns_status_item = None  # macOS native status item (item, delegate) — must stay alive
+
+    def _icon_path():
+        if sys.platform == "darwin":
+            names = ["logo.png", "logo.ico"]
+        else:
+            names = ["logo.ico", "logo.png"]
+        search_dirs = [BASE_DIR]
+        if getattr(sys, "frozen", False) and sys.platform == "darwin":
+            resources_dir = os.path.join(os.path.dirname(BASE_DIR), "Resources")
+            search_dirs.append(resources_dir)
+        for name in names:
+            for d in search_dirs:
+                p = os.path.join(d, name)
+                if os.path.exists(p):
+                    return p
+        return None
 
     def init_tray():
-        nonlocal tray_icon
+        nonlocal tray_icon, _ns_status_item
+        if sys.platform == "darwin":
+            import macos_patch as _mp
+            _ns_status_item = _mp.install_ns_status_item(
+                _icon_path(),
+                on_settings=lambda: launch_settings_process(show_launch=False),
+                on_quit=quit_all,
+            )
+            if _ns_status_item is not None:
+                return
         tray_icon = QSystemTrayIcon(app)
-        icon_path = os.path.join(BASE_DIR, "logo.ico")
-        if not os.path.exists(icon_path):
-            icon_path = os.path.join(BASE_DIR, "logo.png")
-        tray_icon.setIcon(QIcon(icon_path) if os.path.exists(icon_path) else QIcon())
+        path = _icon_path()
+        if path:
+            from PySide6.QtGui import QPixmap
+            pixmap = QPixmap(path)
+            tray_icon.setIcon(QIcon(pixmap) if not pixmap.isNull() else QIcon())
+        else:
+            tray_icon.setIcon(QIcon())
         tray_icon.setToolTip(_tr("MainTray.tooltip"))
-
         menu = QMenu()
         settings_action = menu.addAction(_tr("MainTray.settings"))
         settings_action.triggered.connect(lambda: launch_settings_process(show_launch=False))
@@ -509,7 +537,8 @@ def main():
     )
     has_configured_models = bool(configured_models())
 
-    init_tray()
+    from PySide6.QtCore import QTimer
+    QTimer.singleShot(0, init_tray)
     init_ipc_server()
     init_ai_status_server()
 

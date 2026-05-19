@@ -6,6 +6,7 @@ from pathlib import Path
 
 import fluent_bootstrap  # noqa: F401
 from cx_Freeze import Executable, setup
+from cx_Freeze.command.bdist_mac import bdist_mac
 from cx_Freeze.command.bdist_msi import bdist_msi
 from cx_Freeze.command.build_exe import build_exe
 
@@ -118,6 +119,7 @@ def release_arch_name() -> str:
 
 include_files = [
     include_if_exists("logo.ico"),
+    include_if_exists("logo.png"),
     include_if_exists("band.json"),
     include_if_exists("outfit.json"),
     _compiled_lua_include("custom_hit_area_state.lua"),
@@ -142,6 +144,7 @@ build_exe_options = {
         "PySide6.QtWidgets",
         "darkdetect",
         "lupa.luajit21",
+        "numpy",
         "qfluentwidgets",
         "sqlite3",
     ],
@@ -161,6 +164,19 @@ build_msi_options = {
     }
 } if sys.platform == "win32" else {}
 
+build_mac_options = {
+    "bundle_name": "BandoriPet",
+    "iconfile": str(BASE_DIR / "logo.icns") if (BASE_DIR / "logo.icns").exists() else None,
+    "plist_items": [
+        ("CFBundleName", "BandoriPet"),
+        ("CFBundleDisplayName", "BandoriPet"),
+        ("CFBundleIdentifier", "com.bandoripet.app"),
+        ("CFBundleVersion", "2.2.4"),
+        ("CFBundleShortVersionString", "2.2.4"),
+        ("LSUIElement", True),
+    ],
+} if sys.platform == "darwin" else {}
+
 base = "Win32GUI" if sys.platform == "win32" else None
 icon = str(BASE_DIR / "logo.ico") if (BASE_DIR / "logo.ico").exists() else None
 
@@ -179,7 +195,12 @@ setup(
     name="BandoriPet",
     version="2.2.4",
     description="Bandori desktop pet",
-    options={"build_exe": build_exe_options, "build_msi": build_msi_options, "bdist_msi": build_msi_options},
+    options={
+        "build_exe": build_exe_options,
+        "build_msi": build_msi_options,
+        "bdist_msi": build_msi_options,
+        "bdist_mac": build_mac_options,
+    },
     executables=executables,
     cmdclass={"build_exe": BuildExeWithEmptyModels, "build_msi": BuildMsiAlias},
 )
