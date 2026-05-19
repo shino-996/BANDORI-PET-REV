@@ -54,6 +54,7 @@ class PixelPetWidget(QWidget):
         self._window_drag_callback = None
         self._click_callback = None
         self._right_click_callback = None
+        self._double_click_callback = None
         self._move_target = QPoint()
         self._waiting_for_target = False
         self._hovering = False
@@ -84,6 +85,9 @@ class PixelPetWidget(QWidget):
 
     def set_right_click_callback(self, cb):
         self._right_click_callback = cb
+
+    def set_double_click_callback(self, cb):
+        self._double_click_callback = cb
 
     def set_drag_locked(self, locked: bool):
         self._drag_locked = locked
@@ -285,6 +289,12 @@ class PixelPetWidget(QWidget):
             self._dragging = False
         if should_click:
             self._click_callback()
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent):
+        if event.button() != Qt.MouseButton.LeftButton:
+            return super().mouseDoubleClickEvent(event)
+        if self.is_sprite_hit_at_global(event.globalPosition().toPoint()) and self._double_click_callback:
+            self._double_click_callback()
 
     def mouseMoveEvent(self, event: QMouseEvent):
         if self._drag_locked or not (self._dragging and self._window_drag_callback):

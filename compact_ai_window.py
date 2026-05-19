@@ -91,6 +91,7 @@ class CompactPromptEdit(QTextEdit):
 
 class CompactAIWindow(QWidget):
     action_triggered = Signal(str)
+    content_cleared = Signal()
 
     def __init__(self, character: str, model_manager, config_manager, parent=None):
         super().__init__(parent)
@@ -126,6 +127,7 @@ class CompactAIWindow(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setAutoFillBackground(False)
         self.setMinimumSize(240, 82)
         self.resize(300, 88)
@@ -158,12 +160,14 @@ class CompactAIWindow(QWidget):
         self._input.setPlaceholderText(_tr("CompactAIWindow.input_placeholder"))
         self._input.send_requested.connect(self.send_message)
         self._input.textChanged.connect(self._sync_scrollbar_policies)
+        self._input.hide()
         row.addWidget(self._input, 1)
 
         self._send_button = QPushButton("\u2191", self)
         self._send_button.setObjectName("compactSendButton")
         self._send_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self._send_button.clicked.connect(self.send_message)
+        self._send_button.hide()
         row.addWidget(self._send_button)
         self._sync_scaled_controls()
 
@@ -298,8 +302,14 @@ class CompactAIWindow(QWidget):
     def reset_position_offset(self):
         self._manual_offset = None
 
-    def _base_output_height(self) -> int:
+    def _input_row_height(self) -> int:
+        if self._input.isHidden():
+            return 0
         return self._input.height() if self._input.height() > 0 else max(34, self._font_size() + 22)
+
+    def _base_output_height(self) -> int:
+        h = self._input_row_height()
+        return h if h > 0 else max(34, self._font_size() + 22)
 
     def _max_output_height(self) -> int:
         return max(self._base_output_height(), min(240, int(round(self.width() * 0.78))))
@@ -317,7 +327,9 @@ class CompactAIWindow(QWidget):
         return max(self._base_output_height(), min(max_height, content_height))
 
     def _target_window_height(self) -> int:
-        return self._target_output_height() + self._input.height() + 8
+        input_h = self._input_row_height()
+        spacing = 8 if input_h > 0 else 0
+        return self._target_output_height() + input_h + spacing
 
     def _set_output_text(self, text: str, animated: bool = True):
         self._output.setPlainText(text)
@@ -414,6 +426,7 @@ class CompactAIWindow(QWidget):
         # whenever the user clicks another app. Pin it visible.
         macos_patch.set_hides_on_deactivate(self, False)
         macos_patch.set_collection_behavior(self, macos_patch.PET_COLLECTION_BEHAVIOR)
+        macos_patch.set_becomes_key_only_if_needed(self)
 
     def nativeEvent(self, event_type, message):
         if os.name == "nt":
@@ -510,6 +523,7 @@ class CompactAIWindow(QWidget):
     def _clear_external_output(self):
         self._external_stream_text = ""
         self._set_output_text("")
+        self.content_cleared.emit()
 
     def _format_ai_event_text(self, state: str, title: str, text: str, source: str, progress) -> str:
         prefix = title or self._state_label(state)

@@ -299,6 +299,7 @@ class PetWindow(QWidget):
         self._live2d_widget.set_window_drag_callback(self._on_drag)
         self._live2d_widget.set_click_callback(self._on_click)
         self._live2d_widget.set_right_click_callback(self._on_right_click)
+        self._live2d_widget.set_double_click_callback(self._open_chat)
         self._live2d_widget.set_fps(self._fps)
         self._live2d_widget.set_render_quality(self._live2d_quality)
         self._live2d_widget.model_loaded.connect(self._on_live2d_model_loaded)
@@ -308,6 +309,7 @@ class PetWindow(QWidget):
         self._pixel_widget.set_window_drag_callback(self._on_drag)
         self._pixel_widget.set_click_callback(self._on_click)
         self._pixel_widget.set_right_click_callback(self._on_right_click)
+        self._pixel_widget.set_double_click_callback(self._open_chat)
         self._stack.addWidget(self._pixel_widget)
 
     @staticmethod
@@ -1185,6 +1187,10 @@ class PetWindow(QWidget):
                 self._chat_process.kill()
         self._chat_process = None
 
+    def _on_compact_ai_content_cleared(self):
+        if self._compact_ai_window is not None:
+            self._compact_ai_window.hide()
+
     def _close_compact_ai_window(self):
         if self._compact_ai_window is None:
             return
@@ -1212,6 +1218,7 @@ class PetWindow(QWidget):
                 self._cfg,
             )
             self._compact_ai_window.action_triggered.connect(self._on_chat_action)
+            self._compact_ai_window.content_cleared.connect(self._on_compact_ai_content_cleared)
         self._compact_ai_window.set_character(self._current_char)
         self._compact_ai_window.refresh_theme()
         return self._compact_ai_window
