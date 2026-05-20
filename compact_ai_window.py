@@ -415,6 +415,9 @@ class CompactAIWindow(QWidget):
         super().showEvent(event)
         self._apply_windows_frameless_fix()
         if macos_patch is not None:
+            # NSWindow exists by showEvent time; set this synchronously so the
+            # panel never becomes key during the gap before the next event tick.
+            macos_patch.set_becomes_key_only_if_needed(self)
             QTimer.singleShot(0, self._apply_macos_window_polish)
 
     def _apply_macos_window_polish(self):

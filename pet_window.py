@@ -1266,7 +1266,6 @@ class PetWindow(QWidget):
             target_width, bounds = self._compact_window_target()
             self._compact_ai_window.position_near_pet(self.geometry(), target_width, bounds)
         self._compact_ai_window.show()
-        self._compact_ai_window.raise_()
 
     def _move_compact_ai_with_pet(self, dx: int, dy: int):
         if (
